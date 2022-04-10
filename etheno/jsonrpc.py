@@ -138,6 +138,32 @@ class EventSummaryPlugin(EthenoPlugin):
             f"Function call with {value} wei from {from_address} to {to_address} with {(len(data)-2)//2} bytes of data for {gas_used} gas with a gas price of {gas_price}"
         )
 
+    def handle_transaction(self, transaction, result):
+        if "value" not in transaction or transaction["value"] is None:
+            value = "0x0"
+        else:
+            value = transaction["value"]
+        if "to" not in result["result"] or result["result"]["to"] is None:
+            # this transaction is creating a contract:
+            contract_address = result["result"]["contractAddress"]
+            self.handle_contract_created(
+                transaction["from"],
+                contract_address,
+                result["result"]["gasUsed"],
+                transaction["gasPrice"],
+                transaction["data"],
+                value,
+            )
+        else:
+            self.handle_function_call(
+                transaction["from"],
+                transaction["to"],
+                result["result"]["gasUsed"],
+                transaction["gasPrice"],
+                transaction["data"],
+                value,
+            )
+
     def after_post(self, post_data, result):
         if len(result):
             result = result[0]
@@ -169,33 +195,8 @@ class EventSummaryPlugin(EthenoPlugin):
                 )
                 return
             original_transaction = self._transactions[transaction_hash]
-            if (
-                "value" not in original_transaction
-                or original_transaction["value"] is None
-            ):
-                value = "0x0"
-            else:
-                value = original_transaction["value"]
-            if "to" not in result["result"] or result["result"]["to"] is None:
-                # this transaction is creating a contract:
-                contract_address = result["result"]["contractAddress"]
-                self.handle_contract_created(
-                    original_transaction["from"],
-                    contract_address,
-                    result["result"]["gasUsed"],
-                    original_transaction["gasPrice"],
-                    original_transaction["data"],
-                    value,
-                )
-            else:
-                self.handle_function_call(
-                    original_transaction["from"],
-                    original_transaction["to"],
-                    result["result"]["gasUsed"],
-                    original_transaction["gasPrice"],
-                    original_transaction["data"],
-                    value,
-                )
+
+            self.handle_transaction(original_transaction, result)
 
 
 class EventSummaryExportPlugin(EventSummaryPlugin):
