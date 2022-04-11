@@ -114,6 +114,7 @@ class EventSummaryPlugin(EthenoPlugin):
 
     def handle_contract_created(
         self,
+        transaction_hash: int,
         creator_address: str,
         contract_address: str,
         gas_used: str,
@@ -127,6 +128,7 @@ class EventSummaryPlugin(EthenoPlugin):
 
     def handle_function_call(
         self,
+        transaction_hash: int,
         from_address: str,
         to_address: str,
         gas_used: str,
@@ -138,29 +140,46 @@ class EventSummaryPlugin(EthenoPlugin):
             f"Function call with {value} wei from {from_address} to {to_address} with {(len(data)-2)//2} bytes of data for {gas_used} gas with a gas price of {gas_price}"
         )
 
-    def handle_transaction(self, transaction, result):
+    def handle_transaction(self, post_data, transaction_hash, transaction, result):
+        print(f"Post data: {post_data}")
+        print(f"Result: {result}")
+        print(f"Transaction: {transaction}")
+
         if "value" not in transaction or transaction["value"] is None:
             value = "0x0"
         else:
             value = transaction["value"]
+
         if "to" not in result["result"] or result["result"]["to"] is None:
-            # this transaction is creating a contract:
+            # Contract created
+
+            # skip this transaction. we will log it using 'eth_getTransactionReceipt'
+            if post_data["method"] == "eth_getTransactionByHash":
+                print("Skip this transaction")
+                return
+
             contract_address = result["result"]["contractAddress"]
             self.handle_contract_created(
+                transaction_hash,
                 transaction["from"],
                 contract_address,
-                result["result"]["gasUsed"],
+                # result["result"]["gasUsed"],  # FIXME!
+                transaction["gas"],
                 transaction["gasPrice"],
                 transaction["data"],
                 value,
             )
         else:
+            # Function call
+
             self.handle_function_call(
+                transaction_hash,
                 transaction["from"],
                 transaction["to"],
-                result["result"]["gasUsed"],
+                # result["result"]["gasUsed"],  # FIXME!
+                transaction["gas"],
                 transaction["gasPrice"],
-                transaction["data"],
+                transaction["data"] if "data" in transaction else "0xa3e76c0f",
                 value,
             )
 
@@ -187,7 +206,11 @@ class EventSummaryPlugin(EthenoPlugin):
             self.handle_increase_block_number()
         elif post_data["method"] == "evm_increaseTime":
             self.handle_increase_block_timestamp(post_data["params"][0])
-        elif post_data["method"] == "eth_getTransactionReceipt":
+
+        elif post_data["method"] in [
+            "eth_getTransactionReceipt",
+            "eth_getTransactionByHash",
+        ]:
             transaction_hash = int(post_data["params"][0], 16)
             if transaction_hash not in self._transactions:
                 self.logger.error(
@@ -196,13 +219,17 @@ class EventSummaryPlugin(EthenoPlugin):
                 return
             original_transaction = self._transactions[transaction_hash]
 
-            self.handle_transaction(original_transaction, result)
+            self.handle_transaction(
+                post_data, transaction_hash, original_transaction, result
+            )
 
 
 class EventSummaryExportPlugin(EventSummaryPlugin):
     def __init__(self, out_stream: Union[str, TextIO]):
         super().__init__()
         self._exporter = JSONExporter(out_stream)
+
+        self.exported_transactions = []
 
     def run(self):
         for address in self.etheno.accounts:
@@ -227,6 +254,7 @@ class EventSummaryExportPlugin(EventSummaryPlugin):
 
     def handle_contract_created(
         self,
+        transaction_hash: int,
         creator_address: str,
         contract_address: str,
         gas_used: str,
@@ -234,23 +262,36 @@ class EventSummaryExportPlugin(EventSummaryPlugin):
         data: str,
         value: str,
     ):
-        self._exporter.write_entry(
-            {
-                "event": "ContractCreated",
-                "from": creator_address,
-                "contract_address": contract_address,
-                "gas_used": gas_used,
-                "gas_price": gas_price,
-                "data": data,
-                "value": value,
-            }
-        )
+        if transaction_hash not in self.exported_transactions:
+            self._exporter.write_entry(
+                {
+                    "event": "ContractCreated",
+                    "from": creator_address,
+                    "contract_address": contract_address,
+                    "gas_used": gas_used,
+                    "gas_price": gas_price,
+                    "data": data,
+                    "value": value,
+                }
+            )
+
+            self.exported_transactions.append(transaction_hash)
+        else:
+            print("Skip contract created. Already exported")
+
         super().handle_contract_created(
-            creator_address, contract_address, gas_used, gas_price, data, value
+            transaction_hash,
+            creator_address,
+            contract_address,
+            gas_used,
+            gas_price,
+            data,
+            value,
         )
 
     def handle_function_call(
         self,
+        transaction_hash: int,
         from_address: str,
         to_address: str,
         gas_used: str,
@@ -258,19 +299,24 @@ class EventSummaryExportPlugin(EventSummaryPlugin):
         data: str,
         value: str,
     ):
-        self._exporter.write_entry(
-            {
-                "event": "FunctionCall",
-                "from": from_address,
-                "to": to_address,
-                "gas_used": gas_used,
-                "gas_price": gas_price,
-                "data": data,
-                "value": value,
-            }
-        )
+        if transaction_hash not in self.exported_transactions:
+            self._exporter.write_entry(
+                {
+                    "event": "FunctionCall",
+                    "from": from_address,
+                    "to": to_address,
+                    "gas_used": gas_used,
+                    "gas_price": gas_price,
+                    "data": data,
+                    "value": value,
+                }
+            )
+            self.exported_transactions.append(transaction_hash)
+        else:
+            print("Skip function call. Already exported")
+
         super().handle_function_call(
-            from_address, to_address, gas_used, gas_price, data, value
+            transaction_hash, from_address, to_address, gas_used, gas_price, data, value
         )
 
     def finalize(self):
