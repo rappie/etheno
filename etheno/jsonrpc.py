@@ -179,7 +179,7 @@ class EventSummaryPlugin(EthenoPlugin):
                 # result["result"]["gasUsed"],  # FIXME!
                 transaction["gas"],
                 transaction["gasPrice"],
-                transaction["data"] if "data" in transaction else "0xa3e76c0f",
+                transaction["data"] if "data" in transaction else "0x00",
                 value,
             )
 
